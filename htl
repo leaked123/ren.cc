@@ -1,0 +1,163 @@
+-- Import Orion UI library
+local OrionLib = loadstring(game:HttpGet('https://raw.githubusercontent.com/shlexware/Orion/main/source'))()
+local player = game.Players.LocalPlayer
+local workspace = game.Workspace
+local userInputService = game:GetService("UserInputService")
+local runService = game:GetService("RunService")
+
+-- Initialize variables
+local smoothness = 0.1
+local predictTimeHorizontal = 0.1
+local predictTimeVertical = 0.1
+local targetBodyPart = "Head"
+local isToggled = false
+local keybind = Enum.KeyCode.E -- Default keybind
+
+-- Create Orion UI
+local Window = OrionLib:MakeWindow({Name = "AimLock Script", HidePremium = false, SaveConfig = true, ConfigFolder = "Orion"})
+local AimLockTab = Window:MakeTab({Name = "Aim Lock", Icon = "rbxassetid://4483345998", PremiumOnly = false})
+
+-- Toggle and Body Part Settings
+local AimLockSection = AimLockTab:AddSection({Name = "Aim Lock Settings"})
+
+local BodyPartDropdown = AimLockSection:AddDropdown({
+    Name = "Target Body Part",
+    Options = {"Head", "UpperTorso", "HumanoidRootPart", "LowerTorso", "LeftHand", "RightHand", "LeftLowerArm", "RightLowerArm", "LeftUpperArm", "RightUpperArm", "LeftFoot", "LeftLowerLeg", "LeftUpperLeg", "RightLowerLeg", "RightFoot", "RightUpperLeg"},
+    CurrentOption = targetBodyPart,
+    Callback = function(option)
+        targetBodyPart = option
+    end
+})
+
+-- Add sliders for smoothness and prediction times
+local SlidersSection = AimLockTab:AddSection({Name = "Settings Sliders"})
+
+local SmoothnessSlider = SlidersSection:AddSlider({
+    Name = "Smoothness",
+    Min = 0.1,
+    Max = 1,
+    Default = smoothness,
+    Increment = 0.1,  -- Slider moves in increments of 0.1
+    ValueName = "Smoothness",
+    Color = Color3.fromRGB(255, 255, 255),
+    Callback = function(value)
+        smoothness = value
+    end
+})
+
+local PredictTimeHorizontalSlider = SlidersSection:AddSlider({
+    Name = "Horizontal Prediction Time",
+    Min = 0.005,
+    Max = 0.3,
+    Default = predictTimeHorizontal,
+    Increment = 0.001,  -- Slider moves in increments of 0.01
+    ValueName = "Horizontal Time",
+    Color = Color3.fromRGB(255, 255, 255),
+    Callback = function(value)
+        predictTimeHorizontal = value
+    end
+})
+
+local PredictTimeVerticalSlider = SlidersSection:AddSlider({
+    Name = "Vertical Prediction Time",
+    Min = 0.005,
+    Max = 0.3,
+    Default = predictTimeVertical,
+    Increment = 0.001,  -- Slider moves in increments of 0.01
+    ValueName = "Vertical Time",
+    Color = Color3.fromRGB(255, 255, 255),
+    Callback = function(value)
+        predictTimeVertical = value
+    end
+})
+
+-- Add keybind for toggling Aim Lock
+local Bind = AimLockSection:AddBind({
+    Name = "Bind",
+    Default = keybind,
+    Hold = false,
+    Callback = function()
+        isToggled = not isToggled
+        print("Aim Lock " .. (isToggled and "Enabled" or "Disabled"))
+    end
+})
+
+-- Find and Predict Functions
+local function FindObj(name, parent, radius, bodyPartName)
+    local playerPos = player.Character and player.Character.HumanoidRootPart and player.Character.HumanoidRootPart.Position
+    if not playerPos then return nil end
+
+    local closest
+    local shortestDist = math.huge
+
+    for _, obj in ipairs(parent:GetChildren()) do
+        if (obj.Name == name or obj:IsA("Player")) and obj:FindFirstChild("Humanoid") and obj.Humanoid.Health > 0 then
+            local bodyPart = obj:FindFirstChild(bodyPartName)
+            if bodyPart then
+                local objPos = bodyPart.Position
+                local dist = (objPos - playerPos).Magnitude
+                if dist <= radius and dist < shortestDist then
+                    local ray = Ray.new(playerPos, (objPos - playerPos).unit * (objPos - playerPos).magnitude)
+                    local part, hitPos = workspace:FindPartOnRay(ray, player.Character, false, true)
+                    if part and part:IsDescendantOf(obj) then
+                        closest = obj
+                        shortestDist = dist
+                    end
+                end
+            end
+        end
+    end
+
+    return closest
+end
+
+local function PredictPosition(obj, timeHorizontal, timeVertical, bodyPartName)
+    local bodyPart = obj:FindFirstChild(bodyPartName)
+    if bodyPart then
+        local headPos = bodyPart.Position
+        local velocity = obj.PrimaryPart.Velocity
+        return Vector3.new(
+            headPos.X + velocity.X * timeHorizontal,
+            headPos.Y + velocity.Y * timeVertical,
+            headPos.Z + velocity.Z * timeHorizontal
+        )
+    end
+    return nil
+end
+
+local function SmoothStep(start, goal, t)
+    return start:Lerp(goal, t)
+end
+
+local function LockOnObj()
+    local radius = 200
+    local FOV = math.rad(45)
+
+    runService.RenderStepped:Connect(function()
+        if isToggled then
+            local closest = FindObj("Dummy", workspace.NPC, radius, targetBodyPart) or FindObj(nil, workspace.Players, radius, targetBodyPart)
+            if closest then
+                local bodyPart = closest:FindFirstChild(targetBodyPart)
+                if bodyPart then
+                    local headPos = bodyPart.Position
+                    local camPos = workspace.CurrentCamera.CFrame.Position
+                    local toEnemy = (headPos - camPos).unit
+                    local camLook = workspace.CurrentCamera.CFrame.LookVector
+                    local angle = math.acos(toEnemy:Dot(camLook) / (toEnemy.Magnitude * camLook.Magnitude))
+                    if angle <= FOV then
+                        local predictedPos = PredictPosition(closest, predictTimeHorizontal, predictTimeVertical, targetBodyPart)
+                        
+                        if predictedPos then
+                            local currentCamCFrame = workspace.CurrentCamera.CFrame
+                            local targetCamCFrame = CFrame.new(camPos, predictedPos)
+                            
+                            workspace.CurrentCamera.CFrame = SmoothStep(currentCamCFrame, targetCamCFrame, smoothness)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+LockOnObj()
